@@ -1,3 +1,8 @@
+# Eliza for Agentic NFTs
+
+The purpose of this fork is to handle the agents for a cross platform Agentic NFT experiment
+
+
 # Eliza 🤖
 
 <div align="center">
