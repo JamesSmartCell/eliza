@@ -403,9 +403,14 @@ export async function loadCharactersFromServer(): Promise<Character[]> {
 
 async function loadCharacterFromServer(token_id: string): Promise<Character> {
     const response = await fetch(`${process.env.CHARACTER_SERVER_URL}/character/${token_id}`);
-    const characterData = await response.json();
-    const character: Character = characterData.character;
-    return character;
+    if (response.ok) {
+        const characterData = await response.json();
+        const character: Character = characterData.character;
+        return character;
+    } else {
+        elizaLogger.error(`Character ${token_id} not found`);
+        return null;
+    }
 }
 
 async function handlePluginImporting(plugins: string[]) {
@@ -870,6 +875,8 @@ const handlePostCharacterLoaded = async (character: Character): Promise<Characte
 }
 
 async function createAdminServer(directClient: DirectClient, charactersArg: string | undefined, adminPort: number) {
+    elizaLogger.info('Creating admin server...');
+
     const http = await import('http');
     const adminServer = http.createServer(async (req, res) => {
         res.setHeader('Content-Type', 'application/json');
@@ -882,49 +889,44 @@ async function createAdminServer(directClient: DirectClient, charactersArg: stri
             return;
         }
 
-        if (req.method === 'POST') {
-            if (req.url === '/restart') {
-                await restartAllAgents(directClient, charactersArg);
-                res.writeHead(200);
-                res.end(JSON.stringify({ success: true, message: 'All agents restarted successfully' }));
-            } else if (req.url?.startsWith('/restart/')) {
-                const characterName = req.url.split('/')[2]?.toLowerCase();
-                if (characterName) {
-                    await restartSpecificCharacter(directClient, characterName, charactersArg);
+        try {
+            if (req.method === 'POST') {
+                if (req.url === '/restart') {
+                    await restartAllAgents(directClient, charactersArg);
                     res.writeHead(200);
-                    res.end(JSON.stringify({ success: true, message: `Character ${characterName} restarted successfully` }));
-                } else {
-                    res.writeHead(400);
-                    res.end(JSON.stringify({ success: false, message: 'Character name required' }));
-                }
-            } else if (req.url === '/add') {
-                let body = '';
-                req.on('data', chunk => {
-                    body += chunk.toString();
-                });
-                req.on('end', async () => {
-                    try {
-                        const { characterPath } = JSON.parse(body);
-                        if (!characterPath) {
-                            res.writeHead(400);
-                            res.end(JSON.stringify({ success: false, message: 'Character path is required' }));
-                            return;
-                        }
-                        await addNewCharacter(directClient, characterPath);
+                    res.end(JSON.stringify({ success: true, message: 'All agents restarted successfully' }));
+                } else if (req.url?.startsWith('/restart/')) {
+                    const characterName = req.url.split('/')[2]?.toLowerCase();
+                    if (characterName) {
+                        const result = await restartSpecificCharacter(directClient, characterName, charactersArg);
                         res.writeHead(200);
-                        res.end(JSON.stringify({ success: true, message: 'Character added successfully' }));
-                    } catch (error) {
-                        res.writeHead(500);
-                        res.end(JSON.stringify({ success: false, message: error.message }));
+                        res.end(JSON.stringify({ success: true, message: `Character ${characterName} restarted successfully`, result }));
+                    } else {
+                        res.writeHead(400);
+                        res.end(JSON.stringify({ success: false, message: 'Character name required' }));
                     }
-                });
+                } else if (req.url?.startsWith('/newagent/')) {
+                    const characterId = req.url.split('/')[2]?.toLowerCase();
+                    if (characterId) {
+                        await addNewCharacter(directClient, characterId);
+                        res.writeHead(200);
+                        res.end(JSON.stringify({ success: true, message: `Character ${characterId} added successfully` }));
+                    } else {
+                        res.writeHead(400);
+                        res.end(JSON.stringify({ success: false, message: 'Character name required' }));
+                    }
+                } else {
+                    res.writeHead(404);
+                    res.end(JSON.stringify({ success: false, message: 'Endpoint not found' }));
+                }
             } else {
-                res.writeHead(404);
-                res.end(JSON.stringify({ success: false, message: 'Endpoint not found' }));
+                res.writeHead(405);
+                res.end(JSON.stringify({ success: false, message: 'Method not allowed' }));
             }
-        } else {
-            res.writeHead(405);
-            res.end(JSON.stringify({ success: false, message: 'Method not allowed' }));
+        } catch (error) {
+            elizaLogger.error('Error in admin server:', error);
+            res.writeHead(500);
+            res.end(JSON.stringify({ success: false, message: 'Internal server error' }));
         }
     });
 
@@ -933,8 +935,8 @@ async function createAdminServer(directClient: DirectClient, charactersArg: stri
         elizaLogger.log(`Admin server listening on port ${adminPort}`);
         elizaLogger.log(`Available endpoints:`);
         elizaLogger.log(`  POST http://localhost:${adminPort}/restart - Restart all agents`);
-        elizaLogger.log(`  POST http://localhost:${adminPort}/restart/{characterName} - Restart specific character`);
-        elizaLogger.log(`  POST http://localhost:${adminPort}/add - Add new character (requires characterPath in body)`);
+        elizaLogger.log(`  POST http://localhost:${adminPort}/restart/{id} - Restart specific character`);
+        elizaLogger.log(`  POST http://localhost:${adminPort}/newagent/{id} - Add new character`);
     });
 
     return adminServer;
@@ -943,14 +945,14 @@ async function createAdminServer(directClient: DirectClient, charactersArg: stri
 const startAgents = async () => {
     const directClient = new DirectClient();
     let serverPort = Number.parseInt(settings.SERVER_PORT || "3000");
-    const adminPort = 8082;
+    const adminPort = 8082; //TODO: move to .env
     const args = parseArguments();
     const charactersArg = args.characters || args.character;
     let characters = [defaultCharacter];
 
     characters = await loadCharactersFromServer();
 
-    try {
+    /*try {
         for (const character of characters) {
             const processedCharacter = await handlePostCharacterLoaded(character);
             await startAgent(processedCharacter, directClient);
@@ -1009,6 +1011,19 @@ const startAgents = async () => {
 
         elizaLogger.log("Run `pnpm start:client` to start the client and visit the outputted URL (http://localhost:5173) to chat with your agents.");
         elizaLogger.log("Type 'restart' and press Enter to restart all agents.");
+    } catch (error) {
+        elizaLogger.error("Error starting agents:", error);
+    }*/
+
+   // Create and start the admin server
+   const adminServer = await createAdminServer(directClient, charactersArg, adminPort);
+   elizaLogger.info('Admin server created and started');
+
+    try {
+        for (const character of characters) {
+            const processedCharacter = await handlePostCharacterLoaded(character);
+            await startAgent(processedCharacter, directClient);
+        }
     } catch (error) {
         elizaLogger.error("Error starting agents:", error);
     }
@@ -1070,9 +1085,10 @@ async function restartAllAgents(directClient: DirectClient, charactersArg: strin
         // Clear all agents
         directClient.agents = {};
 
+        const characters = await loadCharactersFromServer();
+
         // Reload and restart agents
-        const newCharacters = charactersArg ? await loadCharacters(charactersArg) : [defaultCharacter];
-        for (const character of newCharacters) {
+        for (const character of characters) {
             const processedCharacter = await handlePostCharacterLoaded(character);
             elizaLogger.info(`Restarting agent for character: ${character.name}`);
             await startAgent(processedCharacter, directClient);
@@ -1084,40 +1100,28 @@ async function restartAllAgents(directClient: DirectClient, charactersArg: strin
     }
 }
 
-async function restartSpecificCharacter(directClient: DirectClient, characterName: string, charactersArg: string | undefined) {
+async function restartSpecificCharacter(directClient: DirectClient, characterTokenId: string, charactersArg: string | undefined) {
+    let characterName = '';
     try {
-        elizaLogger.info(`Attempting to restart character: ${characterName}`);
+        // input should be tokenId
+        // fetch character from server
+        const character = await loadCharacterFromServer(characterTokenId);
+        elizaLogger.info('Characterrr:', character);
 
-        // Find the character file from the original arguments
-        if (!charactersArg) {
-            elizaLogger.error('No character files specified in original startup');
-            return;
-        }
-
-        const characterFiles = charactersArg.split(',');
-        const matchingFile = characterFiles.find(file =>
-            file.toLowerCase().includes(characterName.toLowerCase())
-        );
-
-        if (!matchingFile) {
-            elizaLogger.error(`No matching character file found for: ${characterName}`);
-            elizaLogger.info('Available characters:', characterFiles.join(', '));
-            return;
-        }
-
-        // Force reload the character file
-        const newCharacter = (await loadCharacters(matchingFile))[0];
-        if (!newCharacter) {
-            elizaLogger.error(`Failed to load character from file: ${matchingFile}`);
+        if (!character) {
+            elizaLogger.error(`Character ${characterTokenId} not found`);
             return;
         }
 
         // Process the character with post processors
-        const processedCharacter = await handlePostCharacterLoaded(newCharacter);
+        const processedCharacter = await handlePostCharacterLoaded(character);
+
+        characterName = character.name;
 
         // Find and stop the existing agent
         let foundAgent = false;
         for (const [id, agent] of Object.entries(directClient.agents)) {
+            elizaLogger.info(`Checking agent: ${id}`);
             if (id.toLowerCase().includes(characterName.toLowerCase())) {
                 elizaLogger.info(`Stopping agent: ${id}`);
                 if (typeof agent.stop === 'function') {
@@ -1139,32 +1143,47 @@ async function restartSpecificCharacter(directClient: DirectClient, characterNam
         elizaLogger.info(`Character ${processedCharacter.name} restarted successfully`);
     } catch (error) {
         elizaLogger.error(`Error restarting character ${characterName}:`, error);
-        throw error; // Re-throw to be handled by caller
     }
 }
 
 // Add this new function above startAgents
-async function addNewCharacter(directClient: DirectClient, characterPath: string) {
+async function addNewCharacter(directClient: DirectClient, characterId: string) {
+    let characterName = '';
     try {
-        elizaLogger.info(`Adding new character from: ${characterPath}`);
-
-        // Load the new character
-        const newCharacter = (await loadCharacters(characterPath))[0];
-        if (!newCharacter) {
-            elizaLogger.error(`Failed to load character from file: ${characterPath}`);
-            return;
-        }
+        // input should be tokenId
+        // fetch character from server
+        const character = await loadCharacterFromServer(characterId);
 
         // Process the character with post processors
-        const processedCharacter = await handlePostCharacterLoaded(newCharacter);
+        const processedCharacter = await handlePostCharacterLoaded(character);
 
-        // Start the new agent
+        characterName = character.name;
+
+        // Find and stop the existing agent (if it exists)
+        let foundAgent = false;
+        for (const [id, agent] of Object.entries(directClient.agents)) {
+            elizaLogger.info(`Checking agent: ${id}`);
+            if (id.toLowerCase().includes(characterName.toLowerCase())) {
+                elizaLogger.info(`Stopping agent: ${id}`);
+                if (typeof agent.stop === 'function') {
+                    await agent.stop();
+                }
+                delete directClient.agents[id];
+                foundAgent = true;
+                break;
+            }
+        }
+
+        if (foundAgent) {
+            elizaLogger.warn(`Character already started: ${characterName}`);
+        }
+
         elizaLogger.info(`Starting new agent for character: ${processedCharacter.name}`);
         await startAgent(processedCharacter, directClient);
         elizaLogger.info(`Character ${processedCharacter.name} added successfully`);
     } catch (error) {
-        elizaLogger.error(`Error adding character from ${characterPath}:`, error);
-        throw error;
+        elizaLogger.error(`Error restarting character ${characterName}:`, error);
+        throw error; // Re-throw to be handled by caller
     }
 }
 
